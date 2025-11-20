@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seqkit Stats Paired-End Calculator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for readability and aesthetics */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 90%;
+            margin: 0 auto;
+        }
+        textarea {
+            min-height: 250px;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+        /* Style for the generated table */
+        #results-table {
+            /* Ensure borders collapse into a single line for a clean grid look */
+            border-collapse: collapse;
+            /* Added explicit minimum width for better presentation of many columns */
+            min-width: 1200px;
+        }
+        /* MODIFIED: Changed border-gray-300 to border-black, kept text-xs */
+        #results-table th {
+            /* Applied border on header cells */
+            @apply border border-black bg-indigo-600 text-white p-3 text-xs font-semibold tracking-wider uppercase;
+        }
+        /* MODIFIED: Changed border-gray-300 to border-black, kept text-xs */
+        #results-table td {
+            /* Applied border on data cells */
+            @apply border border-black p-3 text-xs text-gray-700 whitespace-nowrap;
+        }
+    </style>
+    <script>
+        // Data processing function
+        function calculateMetrics() {
+            const rawData = document.getElementById('stats-input').value.trim();
+            const dataRequiredGb = parseFloat(document.getElementById('data-required-input').value) || 5;
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+            
+            if (!rawData) {
+                resultsDiv.innerHTML = '<p class="text-red-600 font-semibold">Please paste the seqkit stats output data.</p>';
+                return;
+            }
+
+            const lines = rawData.split('\n').filter(line => line.trim() !== '');
+
+            // The first line should be the header
+            if (lines.length < 2) {
+                resultsDiv.innerHTML = '<p class="text-red-600 font-semibold">Please paste the header line and at least one data line.</p>';
+                return;
+            }
+
+            // The header is currently unused for data extraction, but helps skip lines
+            const header = lines[0]; 
+            const dataLines = lines.slice(1);
+
+            const outputData = [];
+
+            // IMPORTANT: Indices based on the standard seqkit stats output (tab/space-separated):
+            const IDX_FILE = 0;
+            const IDX_NUM_SEQS = 3;
+            const IDX_SUM_LEN = 4;
+            const IDX_N50 = 12;      
+            const IDX_Q20 = 14;      
+            const IDX_Q30 = 15;      
+            const IDX_GC = 17;        // Index for GC(%)
+
+            for (const line of dataLines) {
+                // Split by multiple spaces or tabs
+                const parts = line.trim().split(/\s+/);
+                
+                // Check if we have enough parts
+                if (parts.length < 18) { 
+                    console.error("Skipping line due to insufficient columns:", line);
+                    continue; 
+                }
+
+                try {
+                    // Clean and convert values
+                    const fileName = parts[IDX_FILE];
+                    
+                    // Remove commas and convert to number
+                    const numSeqsR1 = parseInt(parts[IDX_NUM_SEQS].replace(/,/g, ''), 10);
+                    const sumLenR1 = parseInt(parts[IDX_SUM_LEN].replace(/,/g, ''), 10);
+                    
+                    // Q20, Q30, and GC are percentages and are taken directly from R1
+                    const q20 = parseFloat(parts[IDX_Q20]);
+                    const q30 = parseFloat(parts[IDX_Q30]);
+                    const gc = parseFloat(parts[IDX_GC]); // Extract GC%
+                    
+                    const n50 = parseInt(parts[IDX_N50].replace(/,/g, ''), 10);
+                    
+                    // --- Perform Paired-End Calculations ---
+                    
+                    // 1. Reads (Total) and Bases (Total) are multiplied by 2 (for R1 + R2)
+                    const readsTotal = numSeqsR1 * 2;
+                    const basesTotal = sumLenR1 * 2;
+
+                    // 2. Data Calculations
+                    const dataGb = basesTotal / 1_000_000_000;
+                    const dataMr = readsTotal / 1_000_000;
+                    const dataMb = basesTotal / 1_000_000;
+                    
+                    // 3. Extract Sample Name: Removes common R1 suffixes 
+                    const sample = fileName.replace(/(_R1_001\.fastq\.gz|_R1\.fastq\.gz|R1\.fastq\.gz)$/i, '');
+                    
+                    outputData.push({
+                        Sample: sample,
+                        Reads: readsTotal,
+                        Bases: basesTotal,
+                        'Q20(%)': q20, 
+                        'Q30(%)': q30, 
+                        'GC(%)': gc, // Include GC%
+                        N50: n50,
+                        'Data in GB': dataGb,
+                        'Data in MR': dataMr,
+                        'Data in MB': dataMb,
+                        'Data Required': dataRequiredGb
+                    });
+
+                } catch (e) {
+                    console.error("Error processing line:", line, "Error:", e);
+                    continue; // Skip line on parsing error
+                }
+            }
+            
+            if (outputData.length === 0) {
+                 resultsDiv.innerHTML = '<p class="text-red-600 font-semibold">No valid data rows were processed. Please check your pasted input format.</p>';
+                 return;
+            }
+
+            // Generate HTML table
+            let html = '<div class="overflow-x-auto shadow-xl rounded-lg">';
+            // MODIFIED: Added w-full and table-fixed to ensure it utilizes the container's width, which is forced by min-width in CSS
+            html += '<table id="results-table" class="w-full table-fixed">'; 
+
+            // Table Header
+            // Manually reorder keys to place GC(%) near Q20/Q30
+            const displayKeys = ['Sample', 'Reads', 'Bases', 'Q20(%)', 'Q30(%)', 'GC(%)', 'N50', 'Data in GB', 'Data in MR', 'Data in MB', 'Data Required'];
+            html += '<thead><tr>' + displayKeys.map(key => `<th>${key.replace(/\s/g, '&nbsp;')}</th>`).join('') + '</tr></thead>';
+            
+            // Table Body
+            html += '<tbody class="bg-white">'; 
+            
+            // Helper to format numbers with commas
+            const formatNumber = (num) => {
+                if (typeof num === 'number' && Number.isInteger(num)) {
+                    return num.toLocaleString('en-US');
+                }
+                return num;
+            }
+
+            // Helper to format floats to specific precision
+            const formatFloat = (num, precision) => {
+                return (typeof num === 'number' && !isNaN(num)) ? num.toFixed(precision) : num;
+            }
+
+            for (const row of outputData) {
+                html += '<tr>';
+                html += `<td class="font-mono text-indigo-700">${row.Sample}</td>`;
+                html += `<td>${formatNumber(row.Reads)}</td>`;
+                html += `<td>${formatNumber(row.Bases)}</td>`;
+                html += `<td>${formatFloat(row['Q20(%)'], 2)}</td>`;
+                html += `<td>${formatFloat(row['Q30(%)'], 2)}</td>`;
+                html += `<td>${formatFloat(row['GC(%)'], 2)}</td>`; // Display GC%
+                html += `<td>${formatNumber(row.N50)}</td>`;
+                html += `<td>${formatFloat(row['Data in GB'], 2)}</td>`; 
+                html += `<td>${formatFloat(row['Data in MR'], 2)}</td>`; 
+                html += `<td>${formatFloat(row['Data in MB'], 2)}</td>`; 
+                html += `<td class="font-bold">${formatFloat(row['Data Required'], 2)}</td>`;
+                html += '</tr>';
+            }
+            
+            html += '</tbody></table></div>';
+            resultsDiv.innerHTML = html;
+        }
+
+        // Add a small example to the textarea on load
+        window.onload = function() {
+            // Example data now includes the GC(%) column (50.31 and 51.55)
+            document.getElementById('stats-input').value = `file	format	type	num_seqs	sum_len	min_len	avg_len	max_len	Q1	Q2	Q3	sum_gap	N50	N50_num	Q20(%)	Q30(%)	AvgQual	GC(%)
+SampleA_Cond1_R1_001.fastq.gz	FASTQ	DNA	7,853,701	1,248,738,459	159	159	159	159	159	159	0	159	1	97.61	94.06	26.52	50.31
+SampleB_Cond2_R1.fastq.gz	FASTQ	DNA	10,123,456	1,610,000,000	159	159	159	159	159	159	0	159	1	98.15	95.50	27.11	51.55`;
+
+            // Calculate the example data on load
+            calculateMetrics();
+        };
+
+    </script>
+</head>
+<body class="p-6 md:p-10">
+    <div class="container bg-white p-6 md:p-10 rounded-xl shadow-2xl space-y-8">
+        <header class="text-center space-y-3">
+            <img src="https://placehold.co/120x120/10b981/ffffff?text=SEQ+STAT" class="mx-auto rounded-full shadow-xl p-2 bg-white" alt="Sequencing Statistics Icon">
+            
+            <h1 class="text-4xl font-extrabold text-indigo-700 mb-2">Paired-End Data Stats Calculator</h1>
+            <p class="text-gray-600 text-lg">Paste your `seqkit stats -a` output (R1 files only) and get the calculated paired-end metrics.</p>
+        </header>
+
+        <div class="space-y-4 p-6 bg-gray-50 rounded-lg border border-gray-200">
+            <label for="stats-input" class="block text-lg font-medium text-gray-700">1. Paste `seqkit stats -a` Output (R1 files):</label>
+            <textarea id="stats-input" rows="10" class="w-full border-2 border-gray-300 rounded-lg p-3 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"></textarea>
+            
+            <div class="flex flex-col sm:flex-row sm:items-end justify-between space-y-4 sm:space-y-0 sm:space-x-4">
+                <div class="flex-grow">
+                    <label for="data-required-input" class="block text-sm font-medium text-gray-700">2. Enter "Data Required" Value (in GB):</label>
+                    <input type="number" id="data-required-input" value="5" class="mt-1 w-full sm:w-32 border-2 border-gray-300 rounded-lg p-2 focus:ring-indigo-500 focus:border-indigo-500" min="0">
+                </div>
+                <button onclick="calculateMetrics()" class="flex items-center justify-center px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition duration-200 shadow-md hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-indigo-500 focus:ring-opacity-50">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V4a2 2 0 00-2-2H6zm0 2h8v2H6V4zm0 4h8v2H6V8zm0 4h8v2H6v-2z" clip-rule="evenodd" />
+                    </svg>
+                    Calculate Paired-End Data
+                </button>
+            </div>
+        </div>
+
+        <section id="output-section" class="space-y-4">
+            <h2 class="text-2xl font-bold text-gray-800 border-b pb-2">3. Calculated Paired-End Metrics</h2>
+            <div id="results" class="min-h-[100px] flex items-center justify-center p-4">
+                </div>
+        </section>
+
+    </div>
+</body>
+</html>
