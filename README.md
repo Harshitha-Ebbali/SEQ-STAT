@@ -36,7 +36,7 @@ No data is uploaded, stored, or transmitted.
 Save **`SEQ-STAT_calculator.html`** to your desktop or a shared project folder.
 
 ### 2. Open in any browser
-Double-click the file to launch it in Chrome, Edge, Firefox, or any modern browser.
+Double-click the file to launch it in Chrome, Edge, Firefox, or any browser.
 
 ### 3. Paste your data
 Copy the complete output of:
